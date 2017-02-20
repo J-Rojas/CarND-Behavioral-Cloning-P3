@@ -292,14 +292,14 @@ def sdc_model(train_opts=None):
     #model.add(ScaleLayer(1, gray_scale.T))
     # normalize
     #model.add(ksc.Lambda(normalize_image))
-    model.add(kslp.AveragePooling2D(pool_size=(1, 4), strides=None, border_mode='valid'))
+    model.add(kslp.AveragePooling2D(pool_size=(1, 3), strides=None, border_mode='valid'))
     model.add(kslc.Convolution2D(24, 5, 5, activation=activation1, subsample=(2,2), border_mode='valid', init='he_normal', bias=True))
     model.add(kslc.Convolution2D(36, 5, 5, activation=activation1, subsample=(2,2), border_mode='valid', init='he_normal', bias=True))
     model.add(kslc.Convolution2D(48, 5, 5, activation=activation1, border_mode='valid', init='he_normal', bias=True))
     model.add(kslp.MaxPooling2D(pool_size=(2, 2), strides=None, border_mode='valid'))
     model.add(kslc.Convolution2D(64, 3, 3, activation=activation1, border_mode='valid', init='he_normal', bias=True))
     model.add(kslp.MaxPooling2D(pool_size=(2, 2), strides=None, border_mode='valid'))
-    #model.add(kslc.Convolution2D(64, 3, 3, activation=activation1, border_mode='valid', init='he_normal', bias=True))
+    #model.add(kslc.Convolution2D(64, 1, 1, activation=activation1, border_mode='valid', init='he_normal', bias=True))
 
     model.add(ksc.Flatten())
     model.add(ksc.Dropout(train_opts['dropout_rate'] if train_opts and train_opts['dropout_rate'] else 0))
