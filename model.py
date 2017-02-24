@@ -97,15 +97,15 @@ yuv_scale = np.array([[0.299, 0.587, 0.114],
                 [0.615, -0.51499, -0.10001]])
 gray_scale = np.array([[1.0, 0, 0]])
 
-INPUT_SHAPE=(160,320,1)
-BATCH_SIZE=36
+INPUT_SHAPE=(80,320,1)
+BATCH_SIZE=42
 VAL_SPLIT=0.0
 EPOCHS=10
 VAL_SPLIT=0.0
 PREV_STEERING_TIME=525
 LEARNING_RATE=0.0001
 LEARNING_RATE_DECAY=0.00001
-STEERING_CORRECTION=0.1
+STEERING_CORRECTION=0.05
 FILE_SAVE='sdc_weights.hdf5'
 FILE_LOAD='sdc_weights.hdf5'
 
@@ -122,9 +122,9 @@ def find_data_samples_from_file(csvfile, dir, filter=None):
         reader = csv.DictReader(csvfile)
         for row in reader:
             if filter == None or filter(row):
-                row['center'] = dir + row['center']
-                row['left'] = dir + row['left']
-                row['right'] = dir + row['right']
+                row['center'] = (dir + row['center']).replace(' ', '')
+                row['left'] = (dir + row['left']).replace(' ', '')
+                row['right'] = (dir + row['right']).replace(' ', '')
                 samples.append(row)
 
     samples = sorted(samples, key=lambda k: k['center'])
@@ -193,18 +193,23 @@ def filter_road_pixels(img):
 
     #clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
     #img = clahe.apply(img)
-
+    #img = cv2.equalizeHist(img)
+    img = cv2.GaussianBlur(img, (5, 5), 2.0)
     img = img.reshape(INPUT_SHAPE).astype('float32')
 
     img -= np.mean(img)
-    img /= (np.std(img) * 2 + 0.0001)
+    img /= (np.std(img) + 0.0001)
 
     return img
 
-def processImage(pixels):
+def processImage(pixels, trans=0):
 
     pixels = np.dot(pixels, rgb2yuv.T)
     pixels = np.dot(pixels, gray_scale.T)
+
+    #crop rows from 60 to 140 - we do this here for better contrast normalization
+    pixels = pixels[60+trans:140+trans,:]
+
     #mean = np.mean(pixels)
     #std = np.std(pixels)
 
@@ -220,14 +225,18 @@ def processImage(pixels):
     return filter_road_pixels(pixels)
     #return pixels
 
-def loadImage(img, steering, X, y, bFlip):
-    pixels = processImage(mpimg.imread(img))
+def loadImage(img, steering, X, y, bFlip, trans):
+    loaded_pixels = mpimg.imread(img)
+    pixels = processImage(loaded_pixels)
     #pixels = mpimg.imread(img)
     X.append(pixels)
     y.append(steering)
     if bFlip:
         X.append(np.fliplr(pixels))
         y.append(-steering)
+    if trans:
+        X.append(processImage(loaded_pixels, trans))
+        y.append(steering)
     return (X, y)
 
 def showImages(images):
@@ -239,7 +248,7 @@ def showImages(images):
     fig.subplots_adjust(hspace=0.1, wspace=0.1)
 
     for ax, image in zip(axes.flat, images):
-        ax.imshow(image.reshape(160,320), cmap='gray')
+        ax.imshow(image.squeeze(), cmap='gray')
 
     plt.suptitle('Input Data')
     plt.show()
@@ -251,6 +260,7 @@ def loadDataGenerator(data, train_opts=None):
 
     flip_images = train_opts['flip_images'] if train_opts and 'flip_images' in train_opts else False
     use_left_right = train_opts['use_left_right'] if train_opts and 'use_left_right' in train_opts else False
+    use_trans = train_opts['use_trans'] if train_opts and 'use_trans' in train_opts else 0
     shuffle = train_opts['shuffle'] if train_opts and 'shuffle' in train_opts else True
 
     while 1:
@@ -260,10 +270,10 @@ def loadDataGenerator(data, train_opts=None):
 
         for row in data:
             steering = float(row['steering'])
-            loadImage(row['center'], steering, X, y, flip_images)
+            loadImage(row['center'], steering, X, y, flip_images, use_trans)
             if use_left_right:
-                loadImage(row['left'], steering + STEERING_CORRECTION, X, y, flip_images)
-                loadImage(row['right'], steering - STEERING_CORRECTION, X, y, flip_images)
+                loadImage(row['left'], steering + STEERING_CORRECTION, X, y, flip_images, 0)
+                loadImage(row['right'], steering - STEERING_CORRECTION, X, y, flip_images, 0)
 
             if len(X) == BATCH_SIZE:
                 yield (np.array(X),y)
@@ -285,14 +295,14 @@ def sdc_model(train_opts=None):
     YUV = K.variable(yuv_scale.T, name='yuv_scale')
     GRAYSCALE = K.variable(np.array([[1.0, 0.0, 0.0]]).T, name='gray_scale')
 
-    model.add(ksl.Cropping2D(cropping=((60,20), (0,0)), input_shape=INPUT_SHAPE))
+    #model.add(ksl.Cropping2D(cropping=((60,20), (0,0)), input_shape=INPUT_SHAPE))
     # YUV
     #model.add(ScaleLayer(3, yuv_scale.T))
     # GRAYSCALE
     #model.add(ScaleLayer(1, gray_scale.T))
     # normalize
     #model.add(ksc.Lambda(normalize_image))
-    model.add(kslp.AveragePooling2D(pool_size=(1, 3), strides=None, border_mode='valid'))
+    model.add(kslp.AveragePooling2D(pool_size=(1, 3), strides=None, border_mode='valid', input_shape=INPUT_SHAPE))
     model.add(kslc.Convolution2D(24, 5, 5, activation=activation1, subsample=(2,2), border_mode='valid', init='he_normal', bias=True))
     model.add(kslc.Convolution2D(36, 5, 5, activation=activation1, subsample=(2,2), border_mode='valid', init='he_normal', bias=True))
     model.add(kslc.Convolution2D(48, 5, 5, activation=activation1, border_mode='valid', init='he_normal', bias=True))
@@ -325,20 +335,29 @@ def trainAndValidate(model, weights_file, data_train, data_validation=None, trai
 
     show_generator = loadDataGenerator(data_train, train_opts)
     train_generator = loadDataGenerator(data_train, train_opts)
-    val_generator = loadDataGenerator(data_validation, train_opts)
+
+    #it's unnecessary to flip validation images
+    val_opts = train_opts.copy() if train_opts else dict()
+    val_opts['flip_images'] = False
+
+    val_generator = loadDataGenerator(data_validation, val_opts)
 
     #showImages(next(show_generator)[0])
 
     flip_images = train_opts['flip_images'] if train_opts else False
     use_left_right = train_opts['use_left_right'] if train_opts else False
-    mult = 1
+    use_trans = train_opts['use_trans'] if train_opts else False
+
+    mult_train = 1
     if use_left_right:
-        mult += 2
+        mult_train += 2
     if flip_images:
-        mult *= 2
+        mult_train *= 2
+    if use_trans:
+        mult_train += 1
 
     model.fit_generator(train_generator, \
-        samples_per_epoch=len(data_train * mult), nb_val_samples=len(data_validation * mult), \
+        samples_per_epoch=len(data_train * mult_train), nb_val_samples=len(data_validation), \
         nb_epoch=train_opts['epochs'] if train_opts and train_opts['epochs'] else EPOCHS, \
         verbose=1, \
         callbacks=[history], \

@@ -24,7 +24,7 @@ if sample_count < 1:
     sample_count = len(input_data) * sample_count
 
 np.random.shuffle(input_data)
-buckets = [sample_count * 0.35, sample_count * 0.3, sample_count * 0.35]
+buckets = [sample_count * 0.4, sample_count * 0.2, sample_count * 0.4]
 labels = []
 
 total = 0
@@ -72,9 +72,14 @@ if validation_count < 1:
 if validation_count > len(data):
     exit('Error: validation_count > samples')
 
-model_selection = sklearn.model_selection.StratifiedShuffleSplit(1, int(validation_count))
-for train, test in model_selection.split(data, labels):
 
+if validation_count > 0:
+    model_selection = sklearn.model_selection.StratifiedShuffleSplit(1, int(validation_count))
+    fold = model_selection.split(data, labels)
+else:
+    fold = (range(len(data)), None)
+
+for train, test in fold:
     with open(output_dir + '/train.csv', mode='w') as csvfile:
         writer = csv.DictWriter(csvfile, csv_reader.fieldnames)
         writer.writeheader()
