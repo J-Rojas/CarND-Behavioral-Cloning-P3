@@ -98,12 +98,12 @@ yuv_scale = np.array([[0.299, 0.587, 0.114],
 gray_scale = np.array([[1.0, 0, 0]])
 
 INPUT_SHAPE=(80,320,1)
-BATCH_SIZE=42
+BATCH_SIZE=128
 VAL_SPLIT=0.0
 EPOCHS=10
 VAL_SPLIT=0.0
 PREV_STEERING_TIME=525
-LEARNING_RATE=0.0001
+LEARNING_RATE=0.0003
 LEARNING_RATE_DECAY=0.00001
 STEERING_CORRECTION=0.05
 FILE_SAVE='sdc_weights.hdf5'
@@ -147,13 +147,8 @@ def find_data_samples_from_file(csvfile, dir, filter=None):
     return samples
 
 def normalize_image(input_shape):
-
-    # this performs a feature-wise sample-wide mean and std, not a batch-wide mean, by using Keras broadcasting
-    # the goal is to normalize the images individually not in aggregate
-    shape = K.shape(input_shape)
-    v = K.reshape(input_shape, (BATCH_SIZE,-1))
-    input_shape -= K.mean(v, axis=1)
-    input_shape /= (K.std(v, axis=1) + 0.0001) * 2
+    input_shape -= K.mean(input_shape)
+    input_shape /= (K.std(input_shape) + 0.0001) * 1.5
     return input_shape
 
 def convert_scale(input_shape, scale=None):
@@ -235,8 +230,12 @@ def loadImage(img, steering, X, y, bFlip, trans):
         X.append(np.fliplr(pixels))
         y.append(-steering)
     if trans:
-        X.append(processImage(loaded_pixels, trans))
+        pixels = processImage(loaded_pixels, trans)
+        X.append(pixels)
         y.append(steering)
+        if bFlip:
+            X.append(np.fliplr(pixels))
+            y.append(-steering)
     return (X, y)
 
 def showImages(images):
@@ -276,12 +275,14 @@ def loadDataGenerator(data, train_opts=None):
                 loadImage(row['right'], steering - STEERING_CORRECTION, X, y, flip_images, 0)
 
             if len(X) == BATCH_SIZE:
-                yield (np.array(X),y)
+                arrays = sklearn.utils.shuffle(X, y)
+                yield (np.array(arrays[0]), arrays[1])
                 y = []
                 X = []
 
         if len(X) > 0:
-            yield (np.array(X), y)
+            arrays = sklearn.utils.shuffle(X, y)
+            yield (np.array(arrays[0]), arrays[1])
             y = []
             X = []
 
@@ -292,14 +293,24 @@ def sdc_model(train_opts=None):
     activation2 = 'sigmoid'
     initializer = 'he_normal'
 
+    GAUSSIAN5_STD_2 = np.array([ \
+        [0.023528,0.033969,0.038393,0.033969,0.023528], \
+        [0.033969,0.049045,0.055432,0.049045,0.033969], \
+        [0.038393,0.055432,0.062651,0.055432,0.038393], \
+        [0.033969,0.049045,0.055432,0.049045,0.033969], \
+        [0.023528,0.033969,0.038393,0.033969,0.023528] \
+    ]).reshape((5,5,1,1))
+
     YUV = K.variable(yuv_scale.T, name='yuv_scale')
     GRAYSCALE = K.variable(np.array([[1.0, 0.0, 0.0]]).T, name='gray_scale')
 
     #model.add(ksl.Cropping2D(cropping=((60,20), (0,0)), input_shape=INPUT_SHAPE))
     # YUV
-    #model.add(ScaleLayer(3, yuv_scale.T))
+    #model.add(ScaleLayer(3, yuv_scale.T, input_shape=INPUT_SHAPE))
     # GRAYSCALE
     #model.add(ScaleLayer(1, gray_scale.T))
+    # gaussian blur
+    #model.add(kslc.Convolution2D(1, 5, 5, activation=activation1, border_mode='same', weights=[GAUSSIAN5_STD_2], bias=False, trainable=False))
     # normalize
     #model.add(ksc.Lambda(normalize_image))
     model.add(kslp.AveragePooling2D(pool_size=(1, 3), strides=None, border_mode='valid', input_shape=INPUT_SHAPE))
@@ -313,11 +324,10 @@ def sdc_model(train_opts=None):
 
     model.add(ksc.Flatten())
     model.add(ksc.Dropout(train_opts['dropout_rate'] if train_opts and train_opts['dropout_rate'] else 0))
-    model.add(ksc.Dense(200, activation=activation2, init='he_normal', bias=True))
+    model.add(ksc.Dense(100, activation=activation2, init='he_normal', bias=True))
     model.add(ksc.Dropout(train_opts['dropout_rate'] if train_opts and train_opts['dropout_rate'] else 0))
     model.add(ksc.Dense(50, activation=activation2, init='he_normal', bias=True))
     model.add(ksc.Dropout(train_opts['dropout_rate'] if train_opts and train_opts['dropout_rate'] else 0))
-    model.add(ksc.Dense(50, activation=activation2, init=initializer, bias=True))
     model.add(ksc.Dense(10, activation=activation2, init=initializer, bias=True))
     model.add(ksc.Dense(1, init=initializer, bias=True))
 
@@ -351,10 +361,10 @@ def trainAndValidate(model, weights_file, data_train, data_validation=None, trai
     mult_train = 1
     if use_left_right:
         mult_train += 2
-    if flip_images:
-        mult_train *= 2
     if use_trans:
         mult_train += 1
+    if flip_images:
+        mult_train *= 2
 
     model.fit_generator(train_generator, \
         samples_per_epoch=len(data_train * mult_train), nb_val_samples=len(data_validation), \
