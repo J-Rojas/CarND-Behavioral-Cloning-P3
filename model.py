@@ -16,6 +16,42 @@ import sklearn
 from keras import backend as K
 import csv
 
+#
+# CONSTANTS
+#
+
+yuv_scale = np.array([[0.299, 0.587, 0.114],
+                [-0.14713, -0.28886, 0.436],
+                [0.615, -0.51499, -0.10001]])
+
+rgb2yuv = np.array([[0.299, 0.587, 0.114],
+                    [-0.14713, -0.28886, 0.436],
+                    [0.615, -0.51499, -0.10001]])
+
+gray_scale = np.array([[1.0, 0, 0]])
+
+#
+# HYPER-PARAMETERS
+#
+
+INPUT_SHAPE=(80,320,1)
+BATCH_SIZE=128
+VAL_SPLIT=0.0
+EPOCHS=10
+VAL_SPLIT=0.0
+PREV_STEERING_TIME=525
+LEARNING_RATE=0.0001
+LEARNING_RATE_DECAY=0.00001
+STEERING_CORRECTION=0.05
+FILE_SAVE='sdc_weights.hdf5'
+FILE_LOAD='sdc_weights.hdf5'
+
+K.set_floatx('float32')
+K.set_image_dim_ordering('tf')
+
+#
+# KERAS UTILITIES
+#
 class ScaleLayer(ksl.Layer):
     def __init__(self, output_dim, scale, **kwargs):
         self.output_dim = output_dim
@@ -52,6 +88,8 @@ class ScaleLayer(ksl.Layer):
             config.pop('output_dim', None)
 
         return cls(output_dim, scale, **config)
+
+# Custom Keras History
 
 class LossHistory(keras.callbacks.Callback):
 
@@ -92,29 +130,7 @@ def mean_pred(y_true, y_pred):
 
 ksl.ScaleLayer = ScaleLayer
 
-yuv_scale = np.array([[0.299, 0.587, 0.114],
-                [-0.14713, -0.28886, 0.436],
-                [0.615, -0.51499, -0.10001]])
-gray_scale = np.array([[1.0, 0, 0]])
-
-INPUT_SHAPE=(80,320,1)
-BATCH_SIZE=128
-VAL_SPLIT=0.0
-EPOCHS=10
-VAL_SPLIT=0.0
-PREV_STEERING_TIME=525
-LEARNING_RATE=0.0003
-LEARNING_RATE_DECAY=0.00001
-STEERING_CORRECTION=0.05
-FILE_SAVE='sdc_weights.hdf5'
-FILE_LOAD='sdc_weights.hdf5'
-
-K.set_floatx('float32')
-K.set_image_dim_ordering('tf')
-
-rgb2yuv = np.array([[0.299, 0.587, 0.114],
-                    [-0.14713, -0.28886, 0.436],
-                    [0.615, -0.51499, -0.10001]])
+# Load CSV File data
 
 def find_data_samples_from_file(csvfile, dir, filter=None):
     samples = []
@@ -146,6 +162,10 @@ def find_data_samples_from_file(csvfile, dir, filter=None):
 
     return samples
 
+#
+# Input preprocessing utilities
+#
+
 def normalize_image(input_shape):
     input_shape -= K.mean(input_shape)
     input_shape /= (K.std(input_shape) + 0.0001) * 1.5
@@ -157,38 +177,14 @@ def convert_scale(input_shape, scale=None):
 def convert_hsv(img):
     return cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
+#
+# Perform image filtering (GaussianBlur) and normalization.
+#
+
 def filter_road_pixels(img):
 
-    #h = img[:,:,0]
-    #s = img[:,:,1]
-    #v = img[:,:,2]
-
-    #filter out the areas with a hue/saturation outside of the valid range
-    #h_filter_lb = h >= 80
-    #h_filter_ub = h <= 100
-
-    #s_filter_lb = s >= 20
-    #s_filter_ub = s <= 55
-
-    #v_filter_lb = v >= 0
-    #v_filter_ub = v <= 180
-
-    #h_filter = np.logical_and(h_filter_lb, h_filter_ub)
-    #s_filter = np.logical_and(s_filter_lb, s_filter_ub)
-    #v_filter = np.logical_and(v_filter_lb, v_filter_ub)
-
-    #hs_filter = np.logical_and(h_filter, s_filter)
-    #img_filter = np.logical_and(hs_filter, v_filter)
-
-    #keep only the value pixels for the valid areas, color isn't very important
-    #img = v * img_filter.astype('uint8')
-
-    #img = v
     img = img.astype('uint8')
 
-    #clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    #img = clahe.apply(img)
-    #img = cv2.equalizeHist(img)
     img = cv2.GaussianBlur(img, (5, 5), 2.0)
     img = img.reshape(INPUT_SHAPE).astype('float32')
 
@@ -196,6 +192,8 @@ def filter_road_pixels(img):
     img /= (np.std(img) + 0.0001)
 
     return img
+
+# Perform YUV conversion, grayscaling and clipping
 
 def processImage(pixels, trans=0):
 
@@ -205,20 +203,7 @@ def processImage(pixels, trans=0):
     #crop rows from 60 to 140 - we do this here for better contrast normalization
     pixels = pixels[60+trans:140+trans,:]
 
-    #mean = np.mean(pixels)
-    #std = np.std(pixels)
-
-    #print(mean, std)
-
-    #pixels -= mean
-    #pixels /= 127
-
-    #pixels += 0.5
-    #pixels = np.clip(pixels, 0, 1.0).astype('float32')
-
-    #pixels = convert_hsv(pixels)
     return filter_road_pixels(pixels)
-    #return pixels
 
 def loadImage(img, steering, X, y, bFlip, trans):
     loaded_pixels = mpimg.imread(img)
@@ -253,6 +238,10 @@ def showImages(images):
     plt.show()
     plt.close()
 
+#
+# Image loading generator - loads source images and performs data augmentation (flips, translations, etc)
+#
+
 def loadDataGenerator(data, train_opts=None):
     y = []
     X = []
@@ -275,6 +264,7 @@ def loadDataGenerator(data, train_opts=None):
                 loadImage(row['right'], steering - STEERING_CORRECTION, X, y, flip_images, 0)
 
             if len(X) == BATCH_SIZE:
+                # shuffle the batch to prevent any bias based on the order of augmented data
                 arrays = sklearn.utils.shuffle(X, y)
                 yield (np.array(arrays[0]), arrays[1])
                 y = []
@@ -286,6 +276,13 @@ def loadDataGenerator(data, train_opts=None):
             y = []
             X = []
 
+#
+# Model Definition
+#
+# The model is based on NVIDIA's drive architecture. The model has been slightly tweaked to reduce the
+# number of parameters within the model and decrease training time.
+#
+
 def sdc_model(train_opts=None):
     model = ksm.Sequential()
 
@@ -293,26 +290,6 @@ def sdc_model(train_opts=None):
     activation2 = 'sigmoid'
     initializer = 'he_normal'
 
-    GAUSSIAN5_STD_2 = np.array([ \
-        [0.023528,0.033969,0.038393,0.033969,0.023528], \
-        [0.033969,0.049045,0.055432,0.049045,0.033969], \
-        [0.038393,0.055432,0.062651,0.055432,0.038393], \
-        [0.033969,0.049045,0.055432,0.049045,0.033969], \
-        [0.023528,0.033969,0.038393,0.033969,0.023528] \
-    ]).reshape((5,5,1,1))
-
-    YUV = K.variable(yuv_scale.T, name='yuv_scale')
-    GRAYSCALE = K.variable(np.array([[1.0, 0.0, 0.0]]).T, name='gray_scale')
-
-    #model.add(ksl.Cropping2D(cropping=((60,20), (0,0)), input_shape=INPUT_SHAPE))
-    # YUV
-    #model.add(ScaleLayer(3, yuv_scale.T, input_shape=INPUT_SHAPE))
-    # GRAYSCALE
-    #model.add(ScaleLayer(1, gray_scale.T))
-    # gaussian blur
-    #model.add(kslc.Convolution2D(1, 5, 5, activation=activation1, border_mode='same', weights=[GAUSSIAN5_STD_2], bias=False, trainable=False))
-    # normalize
-    #model.add(ksc.Lambda(normalize_image))
     model.add(kslp.AveragePooling2D(pool_size=(1, 3), strides=None, border_mode='valid', input_shape=INPUT_SHAPE))
     model.add(kslc.Convolution2D(24, 5, 5, activation=activation1, subsample=(2,2), border_mode='valid', init='he_normal', bias=True))
     model.add(kslc.Convolution2D(36, 5, 5, activation=activation1, subsample=(2,2), border_mode='valid', init='he_normal', bias=True))
@@ -320,7 +297,6 @@ def sdc_model(train_opts=None):
     model.add(kslp.MaxPooling2D(pool_size=(2, 2), strides=None, border_mode='valid'))
     model.add(kslc.Convolution2D(64, 3, 3, activation=activation1, border_mode='valid', init='he_normal', bias=True))
     model.add(kslp.MaxPooling2D(pool_size=(2, 2), strides=None, border_mode='valid'))
-    #model.add(kslc.Convolution2D(64, 1, 1, activation=activation1, border_mode='valid', init='he_normal', bias=True))
 
     model.add(ksc.Flatten())
     model.add(ksc.Dropout(train_opts['dropout_rate'] if train_opts and train_opts['dropout_rate'] else 0))
@@ -335,6 +311,15 @@ def sdc_model(train_opts=None):
     model.compile(optimizer=optimizer, loss='mse', metrics=['mean_absolute_error'])
 
     return model
+
+#
+# Training and Validation
+#
+# These functions will take a model and a list of training data (images, labels) and a list
+# of validation data to performing training and validation using Keras' 'fit_generator'.
+#
+# The images are loaded via a generator function and
+#
 
 def trainAndValidate(model, weights_file, data_train, data_validation=None, train_opts=None):
     if os.path.isfile(weights_file):
@@ -375,6 +360,10 @@ def trainAndValidate(model, weights_file, data_train, data_validation=None, trai
 
     model.save_weights(weights_file)
 
+#
+# Load model and predict (no training)
+#
+
 def predictModel(model, weights_file, data_test):
     if os.path.isfile(weights_file):
         model.load_weights(weights_file)
@@ -382,6 +371,10 @@ def predictModel(model, weights_file, data_test):
     predict_generator = loadDataGenerator(data_test, {'shuffle': False})
 
     return model.predict_generator(predict_generator, val_samples=len(data_test))
+
+#
+# Wrapper functions for loading, training and prediction
+#
 
 def loadAndTrain(csv_file_train, csv_file_test, weights_file, dir_train, dir_validate = None, train_opts=None):
 
