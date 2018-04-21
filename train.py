@@ -21,4 +21,4 @@ if len(sys.argv) > 7:
     epochs = int(sys.argv[7])
 
 model.loadAndTrain(train_csv, test_csv, weights_file, train_dir, validate_dir, \
-    {'flip_images': True, 'dropout_rate': 0.5, 'use_left_right': True, 'use_trans': -10, 'save_file': save_file, 'epochs': epochs})
+    {'flip_images': True, 'dropout_rate': 0.5, 'use_left_right': True, 'use_trans': 20, 'save_file': save_file, 'epochs': epochs})

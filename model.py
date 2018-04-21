@@ -2,6 +2,7 @@ import os
 import sys
 import cv2
 import tensorflow as tf
+import math
 import numpy as np
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
@@ -12,6 +13,7 @@ import keras.layers.pooling as kslp
 import keras.layers.convolutional as kslc
 import keras.layers.core as ksc
 import keras.optimizers as ksopt
+import keras.preprocessing.image as kimg
 import sklearn
 from keras import backend as K
 import csv
@@ -289,22 +291,23 @@ def sdc_model(train_opts=None):
     activation1 = 'relu'
     activation2 = 'sigmoid'
     initializer = 'he_normal'
+    regularizer = None #keras.regularizers.l2(0.0)
 
-    model.add(kslp.AveragePooling2D(pool_size=(1, 3), strides=None, border_mode='valid', input_shape=INPUT_SHAPE))
-    model.add(kslc.Convolution2D(24, 5, 5, activation=activation1, subsample=(2,2), border_mode='valid', init='he_normal', bias=True))
-    model.add(kslc.Convolution2D(36, 5, 5, activation=activation1, subsample=(2,2), border_mode='valid', init='he_normal', bias=True))
-    model.add(kslc.Convolution2D(48, 5, 5, activation=activation1, border_mode='valid', init='he_normal', bias=True))
-    model.add(kslp.MaxPooling2D(pool_size=(2, 2), strides=None, border_mode='valid'))
-    model.add(kslc.Convolution2D(64, 3, 3, activation=activation1, border_mode='valid', init='he_normal', bias=True))
-    model.add(kslp.MaxPooling2D(pool_size=(2, 2), strides=None, border_mode='valid'))
+    model.add(kslp.AveragePooling2D(pool_size=(1, 2), strides=None, padding='valid', input_shape=INPUT_SHAPE))
+    model.add(kslc.Convolution2D(12, kernel_size=(5, 5), activation=activation1, strides=(2,2), padding='valid', kernel_initializer='he_normal', kernel_regularizer=regularizer, bias_regularizer=regularizer, use_bias=True))
+    model.add(kslc.Convolution2D(24, kernel_size=(5, 5), activation=activation1, strides=(2,2), padding='valid', kernel_initializer='he_normal', kernel_regularizer=regularizer, bias_regularizer=regularizer, use_bias=True))
+    model.add(kslc.Convolution2D(36, kernel_size=(5, 5), activation=activation1, padding='valid', kernel_initializer='he_normal', kernel_regularizer=regularizer, bias_regularizer=regularizer, use_bias=True))
+    model.add(kslp.MaxPooling2D(pool_size=(2, 2), strides=None, padding='valid'))
+    model.add(kslc.Convolution2D(40, kernel_size=(3, 3), activation=activation1, padding='valid', kernel_initializer='he_normal', kernel_regularizer=regularizer, bias_regularizer=regularizer, use_bias=True))
+    model.add(kslp.MaxPooling2D(pool_size=(2, 2), strides=None, padding='valid'))
 
     model.add(ksc.Flatten())
     model.add(ksc.Dropout(train_opts['dropout_rate'] if train_opts and train_opts['dropout_rate'] else 0))
-    model.add(ksc.Dense(100, activation=activation2, init='he_normal', bias=True))
+    model.add(ksc.Dense(100, activation=activation2, kernel_initializer='he_normal', kernel_regularizer=regularizer, bias_regularizer=regularizer, use_bias=True))
     model.add(ksc.Dropout(train_opts['dropout_rate'] if train_opts and train_opts['dropout_rate'] else 0))
-    model.add(ksc.Dense(50, activation=activation2, init='he_normal', bias=True))
+    model.add(ksc.Dense(50, activation=activation2, kernel_initializer='he_normal', kernel_regularizer=regularizer, bias_regularizer=regularizer, use_bias=True))
     model.add(ksc.Dropout(train_opts['dropout_rate'] if train_opts and train_opts['dropout_rate'] else 0))
-    model.add(ksc.Dense(10, activation=activation2, init=initializer, bias=True))
+    model.add(ksc.Dense(10, activation=activation2, kernel_initializer='he_normal', kernel_regularizer=regularizer, bias_regularizer=regularizer, use_bias=True))
     model.add(ksc.Dense(1, init=initializer, bias=True))
 
     optimizer = ksopt.Adam(lr=LEARNING_RATE, decay=LEARNING_RATE_DECAY)
@@ -325,9 +328,6 @@ def trainAndValidate(model, weights_file, data_train, data_validation=None, trai
     if os.path.isfile(weights_file):
         model.load_weights(weights_file)
 
-    np.random.shuffle(data_train)
-    np.random.shuffle(data_validation)
-
     show_generator = loadDataGenerator(data_train, train_opts)
     train_generator = loadDataGenerator(data_train, train_opts)
 
@@ -339,21 +339,12 @@ def trainAndValidate(model, weights_file, data_train, data_validation=None, trai
 
     #showImages(next(show_generator)[0])
 
-    flip_images = train_opts['flip_images'] if train_opts else False
-    use_left_right = train_opts['use_left_right'] if train_opts else False
-    use_trans = train_opts['use_trans'] if train_opts else False
-
-    mult_train = 1
-    if use_left_right:
-        mult_train += 2
-    if use_trans:
-        mult_train += 1
-    if flip_images:
-        mult_train *= 2
+    steps = math.ceil(len(data_train) / BATCH_SIZE)
+    val_steps = math.ceil(len(data_validation) / BATCH_SIZE)
 
     model.fit_generator(train_generator, \
-        samples_per_epoch=len(data_train * mult_train), nb_val_samples=len(data_validation), \
-        nb_epoch=train_opts['epochs'] if train_opts and train_opts['epochs'] else EPOCHS, \
+        steps_per_epoch=steps, validation_steps=val_steps, \
+        epochs=train_opts['epochs'] if train_opts and train_opts['epochs'] else EPOCHS, \
         verbose=1, \
         callbacks=[history], \
         validation_data=val_generator if data_validation else None)
